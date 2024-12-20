@@ -2,14 +2,21 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"time"
 
-	"github.com/rmrobinson/airthings"
+	"github.com/rmrobinson/airthings-btle"
 	"tinygo.org/x/bluetooth"
 )
 
+var (
+	serialNumber = flag.Int("serial", 0, "The serial number of the sensor to search for")
+)
+
 func main() {
+	flag.Parse()
+
 	btAdapter := bluetooth.DefaultAdapter
 
 	err := btAdapter.Enable()
@@ -20,7 +27,7 @@ func main() {
 	scanner := airthings.NewScanner(btAdapter)
 
 	log.Printf("scanning\n")
-	s, err := scanner.FindSensor(context.Background(), 2930170133)
+	s, err := scanner.FindSensor(context.Background(), *serialNumber)
 	if err != nil {
 		log.Fatalf("unable to find sensor: %s\n", err.Error())
 	}
