@@ -1,4 +1,4 @@
-module github.com/rmrobinson/airthings
+module github.com/rmrobinson/airthings-btle
 
 go 1.21.2
 
