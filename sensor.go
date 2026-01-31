@@ -4,13 +4,21 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"log"
 
 	"tinygo.org/x/bluetooth"
 )
 
+// The Bluetooth service UUID containing the Wave Plus measurement data.
+var serviceUUIDWavePlusData, _ = bluetooth.ParseUUID("b42e1c08-ade7-11e4-89d3-123b93f75cba")
+
 // The Bluetooth characteristic UUID for Wave Plus measurement data.
 var characteristicUUIDwavePlusData, _ = bluetooth.ParseUUID("b42e2a68-ade7-11e4-89d3-123b93f75cba")
+
+// DeviceProfile contains the list of Bluetooth service IDs and the characteristic IDs on each service.
+type DeviceProfile struct {
+	ServiceUUID          string
+	CharacteristicsUUIDs []string
+}
 
 // Sensor represents an instance of an Airthings sensor
 type Sensor struct {
@@ -57,23 +65,24 @@ func (s *Sensor) Address() string {
 	return s.device.Address.String()
 }
 
+// Disconnect disconnects from the sensor.
+func (s *Sensor) Disconnect() {
+	s.device.Disconnect()
+}
+
 // Refresh accesses the Bluetooth device to get the most recent readings for this device.
 func (s *Sensor) Refresh() error {
-	log.Printf("getting characteristics of device %s\n", s.device.Address.String())
-	svcs, err := s.device.DiscoverServices(nil)
+	svcs, err := s.device.DiscoverServices([]bluetooth.UUID{serviceUUIDWavePlusData})
 	if err != nil {
 		return err
-	}
-	if len(svcs) < 1 {
+	} else if len(svcs) < 1 {
 		return errors.New("empty service list discovered")
 	}
 
-	log.Printf("discovering characteristics for service %s\n", svcs[0].UUID().String())
 	chars, err := svcs[0].DiscoverCharacteristics([]bluetooth.UUID{characteristicUUIDwavePlusData})
 	if err != nil {
 		return err
-	}
-	if len(chars) < 1 {
+	} else if len(chars) < 1 {
 		return errors.New("empty characteristic list discovered")
 	}
 
@@ -94,10 +103,45 @@ func (s *Sensor) Refresh() error {
 		return err
 	}
 
-	return s.parse(parsedData)
+	return s.parseWavePlusPayload(parsedData)
 }
 
-func (s *Sensor) parse(value *wavePlusPayload) error {
+// GetDeviceProfile iterates the list of Bluetooth services available and retrieves all their available characteristic UUIDs
+func (s *Sensor) GetDeviceProfile() ([]DeviceProfile, error) {
+	svcs, err := s.device.DiscoverServices(nil)
+	if err != nil {
+		return nil, err
+	} else if len(svcs) < 1 {
+		return nil, errors.New("empty service list discovered")
+	}
+
+	ret := []DeviceProfile{}
+	for _, svc := range svcs {
+		svcRet := DeviceProfile{
+			ServiceUUID: svc.UUID().String(),
+		}
+
+		chars, err := svc.DiscoverCharacteristics(nil)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(chars) < 1 {
+			ret = append(ret, svcRet)
+			continue
+		}
+
+		for _, char := range chars {
+			svcRet.CharacteristicsUUIDs = append(svcRet.CharacteristicsUUIDs, char.UUID().String())
+		}
+
+		ret = append(ret, svcRet)
+	}
+
+	return ret, nil
+}
+
+func (s *Sensor) parseWavePlusPayload(value *wavePlusPayload) error {
 	if value.Version != 1 {
 		return errors.New("incorrect version detected")
 	}

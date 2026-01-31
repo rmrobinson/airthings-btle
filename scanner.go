@@ -48,44 +48,39 @@ func (s *Scanner) FindSensor(ctx context.Context, serialNumber int) (*Sensor, er
 					return
 				}
 
-				if sn == serialNumber {
-					log.Printf("found sensor %d\n", sn)
-					s.adapter.StopScan()
+				if sn != serialNumber {
+					continue
+				}
 
-					res <- pendingSensor{
-						scanResult:   result,
-						serialNumber: sn,
-					}
+				//log.Printf("found sensor %d\n", sn)
+				s.adapter.StopScan()
+
+				select {
+				case res <- pendingSensor{
+					scanResult:   result,
+					serialNumber: sn,
+				}:
+				default:
 				}
 			}
 		}
 	})
 
 	if err != nil {
-		log.Printf("unable to scan: %s\n", err.Error())
+		//log.Printf("unable to scan: %s\n", err.Error())
 		return nil, err
 	}
 
 	ps := <-res
-	log.Printf("connecting to %d using Bluetooth address %s\n", ps.serialNumber, ps.scanResult.Address.String())
+	//log.Printf("connecting to %d using Bluetooth address %s\n", ps.serialNumber, ps.scanResult.Address.String())
 	device, err := s.adapter.Connect(ps.scanResult.Address, bluetooth.ConnectionParams{})
 	if err != nil {
-		log.Fatal("unable to connect to device", err)
+		//log.Fatalf("unable to connect to device: %s", err)
 		return nil, err
 	}
 
-	log.Printf("connected to %d creating sensor\n", ps.serialNumber)
+	//log.Printf("connected to %d creating sensor\n", ps.serialNumber)
 	sensor := NewSensor(ps.serialNumber, device)
-
-	log.Printf("refreshing %d\n", ps.serialNumber)
-	err = sensor.Refresh()
-	if err != nil {
-		log.Fatal("unable to refresh sensor", err)
-		return nil, err
-	}
-	if err != nil {
-		log.Fatal("unable to scan", err)
-	}
 
 	return sensor, nil
 }
