@@ -69,15 +69,15 @@ func main() {
 		s.Disconnect()
 
 		log.Printf("Humidity|Illuminance|Radon (Short Term Avg)|Radon (Long Term Avg)|Temperature|Rel Atm Pressure|CO2 Level|VOC Level|")
-		m := s.CurrentMeasurement
+		m := s.CurrentMeasurement()
 		log.Printf("%.1f %%rH %0.1f %% %.1f Bq/m3 %.1f Bq/m3 %.1f degC %.1f hPa %.1f ppm %.1f ppb\n",
 			m.Humidity, m.Illuminance, m.RadonShortTermAvg, m.RadonLongTermAvg,
 			m.Temperature, m.RelativeAtmosphericPressure, m.CO2Level, m.VOCLevel)
-		log.Printf("Battery: %.1f%%, RSSI: %d dBm\n", s.BatteryLevel, s.RSSI)
+		log.Printf("Battery: %.1f%%, RSSI: %d dBm\n", s.BatteryLevel(), s.RSSI())
 
-		if len(s.HistoricalMeasurements) > 0 {
+		if len(s.HistoricalMeasurements()) > 0 {
 			log.Printf("Historical measurements:\n")
-			for _, h := range s.HistoricalMeasurements {
+			for _, h := range s.HistoricalMeasurements() {
 				log.Printf("  %s: Radon (short term): %.1f Bq/m3, Radon (long term): %.1f Bq/m3\n", h.Timestamp, h.RadonShortTermAvg, h.RadonLongTermAvg)
 				log.Printf("    Temperature, Humidity, Rel Atm Pressure, CO2 Level, VOC Level\n")
 				for i := 0; i < len(h.Temperature); i++ {
