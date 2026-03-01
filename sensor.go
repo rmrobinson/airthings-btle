@@ -350,7 +350,10 @@ func (s *Sensor) getHistory(ctx context.Context, svc *bluetooth.DeviceService, h
 	}
 
 	cmdRespHours := binary.LittleEndian.Uint32(cmdResp)
-	log.Printf("requested %d hours of history, sensor responded with %d hours available\n", hours, cmdRespHours)
+	if cmdRespHours-1 != uint32(hours) {
+		// Unclear why but the command seems to return 1 more than we request every time. Alert if it's different than this expectation.
+		log.Printf("requested %d hours of history, sensor responded with %d hours available\n", hours, cmdRespHours)
+	}
 
 	count := hours
 	for {
