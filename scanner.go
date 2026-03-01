@@ -80,7 +80,7 @@ func (s *Scanner) FindSensor(ctx context.Context, serialNumber int) (*Sensor, er
 	}
 
 	//log.Printf("connected to %d creating sensor\n", ps.serialNumber)
-	sensor := NewSensor(ps.serialNumber, device)
+	sensor := NewSensor(ps.serialNumber, device, int(ps.scanResult.RSSI))
 
 	return sensor, nil
 }
