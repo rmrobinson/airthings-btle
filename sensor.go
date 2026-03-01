@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"log"
 	"time"
 
 	"tinygo.org/x/bluetooth"
@@ -83,6 +84,9 @@ type Sensor struct {
 	// SerialNumber is the serial number of this sensor
 	SerialNumber int
 
+	// RSSI is the signal strength of the connection to this sensor. It is populated once, after scan.
+	RSSI int
+
 	// BatteryLevel contains the level of the battery of the sensor
 	BatteryLevel float32
 
@@ -90,11 +94,11 @@ type Sensor struct {
 	CurrentMeasurement Measurement
 
 	// HistoricalMeasurements is a slice of past readings (hourly history blocks).
-	HistoricalMeasurements []Measurement
+	HistoricalMeasurements []HistoryMeasurement
 }
 
 // NewSensor creates a sensor from a connected Bluetooth device which will be read from to retrieve values periodically.
-func NewSensor(serialNumber int, device bluetooth.Device) *Sensor {
+func NewSensor(serialNumber int, device bluetooth.Device, rssi int) *Sensor {
 	return &Sensor{
 		device:       device,
 		SerialNumber: serialNumber,
@@ -140,6 +144,21 @@ func (s *Sensor) Refresh(ctx context.Context) error {
 	return nil
 }
 
+// RefreshHistory retrieves historical measurements for this sensor. It takes in the number of hours back to query.
+func (s *Sensor) RefreshHistory(ctx context.Context, hours int) error {
+	svcs, err := s.device.DiscoverServices([]bluetooth.UUID{serviceUUIDWavePlusData})
+	if err != nil {
+		return err
+	} else if len(svcs) < 1 {
+		return errors.New("empty service list discovered")
+	}
+
+	if err := s.getHistory(ctx, &svcs[0], hours); err != nil {
+		return err
+	}
+	return nil
+}
+
 // refreshCurrentData reads the current values characteristic from the given service,
 // parses the payload, and updates the sensor's CurrentMeasurement.
 func (s *Sensor) refreshCurrentData(_ context.Context, svc *bluetooth.DeviceService) error {
@@ -162,12 +181,11 @@ func (s *Sensor) refreshCurrentData(_ context.Context, svc *bluetooth.DeviceServ
 	buf := bytes.NewReader(data[0:len])
 
 	parsedData := &currentValuesPayload{}
-	err = binary.Read(buf, binary.LittleEndian, parsedData)
-	if err != nil {
+	if err := binary.Read(buf, binary.LittleEndian, parsedData); err != nil {
 		return err
 	}
 
-	m, err := s.parseCurrentValuesPayload(parsedData)
+	m, err := parseCurrentValuesPayload(parsedData)
 	if err != nil {
 		return err
 	}
@@ -192,7 +210,7 @@ func (s *Sensor) query2(ctx context.Context, svc *bluetooth.DeviceService) error
 	// respond with a notification containing the 28-byte payload.
 	char := cmdChars[0]
 	respChan := make(chan []byte, 1)
-	err = char.EnableNotifications(func(buf []byte) {
+	if err := char.EnableNotifications(func(buf []byte) {
 		// copy buffer since tinygo may reuse slice
 		dataCopy := make([]byte, len(buf))
 		copy(dataCopy, buf)
@@ -200,38 +218,35 @@ func (s *Sensor) query2(ctx context.Context, svc *bluetooth.DeviceService) error
 		case respChan <- dataCopy:
 		default:
 		}
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 	// ensure notifications disabled when we leave or if context ends
 	defer char.EnableNotifications(nil)
 
 	cmdData := []byte{0x6d}
-	_, err = char.WriteWithoutResponse(cmdData)
-	if err != nil {
+	if _, err := char.WriteWithoutResponse(cmdData); err != nil {
 		return err
 	}
 
-	var data []byte
+	var respData []byte
 	select {
-	case data = <-respChan:
+	case respData = <-respChan:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 
-	if data[0] != cmdData[0] {
+	if respData[0] != cmdData[0] {
 		return errors.New("unexpected query2 response command byte")
 	}
-	data = data[2:] // strip off command bytes
-	if len(data) != 28 {
+	respData = respData[2:] // strip off command bytes
+	if len(respData) != 28 {
 		return errors.New("unexpected query2 response length")
 	}
 
 	// Parse the response into a query2Payload and update battery.
-	q2 := &query2Payload{Raw: data}
-	err = s.parseQuery2Payload(q2)
-	if err != nil {
+	q2 := &query2Payload{Raw: respData}
+	if err := parseQuery2Payload(q2); err != nil {
 		return err
 	}
 	// convert voltage (volts) into 0–100% using V_MIN/V_MAX
@@ -247,6 +262,122 @@ func (s *Sensor) query2(ctx context.Context, svc *bluetooth.DeviceService) error
 	}
 	s.BatteryLevel = float32(pct)
 	return nil
+}
+
+// getHistory executes a command to retrieve historical data for this sensor. It takes in the number of hours back to query.
+func (s *Sensor) getHistory(ctx context.Context, svc *bluetooth.DeviceService, hours int) error {
+	// Discover the command characteristic.
+	cmdChars, err := svc.DiscoverCharacteristics([]bluetooth.UUID{characteristicUUIDCommand})
+	if err != nil {
+		return err
+	} else if len(cmdChars) < 1 {
+		return errors.New("command characteristic not found")
+	}
+
+	sensorChars, err := svc.DiscoverCharacteristics([]bluetooth.UUID{characteristicUUIDSensorRecord})
+	if err != nil {
+		return err
+	} else if len(sensorChars) < 1 {
+		return errors.New("sensor record characteristic not found")
+	}
+
+	// Write the getHistory command (0x6d) to the command characteristic and
+	// enable notifications on that same characteristic. The device will
+	// respond with a notification containing the 28-byte payload.
+	cmdChar := cmdChars[0]
+	cmdRespChan := make(chan []byte, 1)
+	if err := cmdChar.EnableNotifications(func(buf []byte) {
+		// copy buffer since tinygo may reuse slice
+		dataCopy := make([]byte, len(buf))
+		copy(dataCopy, buf)
+		select {
+		case cmdRespChan <- dataCopy:
+		default:
+		}
+	}); err != nil {
+		return err
+	}
+	// ensure notifications disabled when we leave or if context ends
+	defer cmdChar.EnableNotifications(nil)
+
+	sensorChar := sensorChars[0]
+	sensorRespChan := make(chan []byte, hours)
+	if err := sensorChar.EnableNotifications(func(buf []byte) {
+		// copy buffer since tinygo may reuse slice
+		dataCopy := make([]byte, len(buf))
+		copy(dataCopy, buf)
+		select {
+		case sensorRespChan <- dataCopy:
+		default:
+		}
+	}); err != nil {
+		return err
+	}
+	// ensure notifications disabled when we leave or if context ends
+	defer sensorChar.EnableNotifications(nil)
+
+	getHistoryCmd := &getHistoryCommand{
+		CommandID:      0x01,
+		Field1:         2,
+		Field2:         0,
+		HoursToInclude: uint16(hours),
+		Field4:         0,
+	}
+	getHistoryCmdBuf := &bytes.Buffer{}
+	if err := binary.Write(getHistoryCmdBuf, binary.LittleEndian, getHistoryCmd); err != nil {
+		return err
+	}
+
+	cmdData := getHistoryCmdBuf.Bytes()
+	_, err = cmdChar.WriteWithoutResponse(cmdData)
+	if err != nil {
+		return err
+	}
+
+	var cmdResp []byte
+	select {
+	case cmdResp = <-cmdRespChan:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	if cmdResp[0] != cmdData[0] {
+		return errors.New("unexpected getHistory command response command byte")
+	}
+	cmdResp = cmdResp[2:] // strip off command bytes
+	if len(cmdResp) != 4 {
+		return errors.New("unexpected getHistory command response length")
+	}
+
+	cmdRespHours := binary.LittleEndian.Uint32(cmdResp)
+	log.Printf("requested %d hours of history, sensor responded with %d hours available\n", hours, cmdRespHours)
+
+	count := hours
+	for {
+		select {
+		case sensorResp := <-sensorRespChan:
+			buf := bytes.NewReader(sensorResp)
+
+			parsedData := &historyHourPayload{}
+			if err := binary.Read(buf, binary.LittleEndian, parsedData); err != nil {
+				return err
+			}
+
+			historyRecord, err := parseHistoryHourPayload(parsedData)
+			if err != nil {
+				return err
+			}
+
+			s.HistoricalMeasurements = append(s.HistoricalMeasurements, historyRecord)
+
+			if count--; count <= 0 {
+				return nil
+			}
+
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // GetDeviceProfile iterates the list of Bluetooth services available and retrieves all their available characteristic UUIDs
@@ -284,34 +415,7 @@ func (s *Sensor) GetDeviceProfile() ([]DeviceProfile, error) {
 	return ret, nil
 }
 
-func (s *Sensor) parseCurrentValuesPayload(value *currentValuesPayload) (Measurement, error) {
-	var m Measurement
-	if value.Version != 1 {
-		return m, errors.New("incorrect version detected")
-	}
-
-	m.Humidity = float32(value.Humidity) / 2.0
-	m.Illuminance = float32(value.Illuminance) * 1.0
-
-	if value.Radon1DayAvg > 16383 {
-		// leave default -1 and return error
-		return m, errors.New("radon value outside bounds")
-	}
-	m.RadonShortTermAvg = float32(value.Radon1DayAvg)
-
-	if value.RadonLongTermAvg > 16383 {
-		return m, errors.New("radon value outside bounds")
-	}
-	m.RadonLongTermAvg = float32(value.RadonLongTermAvg)
-
-	m.Temperature = float32(value.Temp) / 100.0
-	m.RelativeAtmosphericPressure = float32(value.RelAtmPressure) / 50.0
-	m.CO2Level = float32(value.CO2Level) * 1.0
-	m.VOCLevel = float32(value.VOCLevel) * 1.0
-
-	return m, nil
-}
-
+// currentValuesPayload contains the current values reported by the sensor, in the binary format read from the Bluetooth characteristic.
 type currentValuesPayload struct {
 	Version          uint8
 	Humidity         uint8
@@ -361,6 +465,16 @@ type query3Payload struct {
 	Raw         []byte
 }
 
+// getHistoryCommand holds fields to be encoded to make a getHistory request.
+// CommandID should be 0x01; Field 1 should be 2, Field 2 and Field 4 should be 0
+type getHistoryCommand struct {
+	CommandID      uint8
+	Field1         uint16
+	Field2         uint16
+	HoursToInclude uint16
+	Field4         uint16
+}
+
 // historyHourPayload corresponds to one 230-byte history block returned by
 // the sensor. It holds raw sensor readings (temperature, humidity, pressure,
 // CO2, VOC, ambient light, etc.) from 12 one-hour periods plus metadata.
@@ -404,8 +518,37 @@ type historyEntry struct {
 	X3  uint32
 }
 
+// parseCurrentValuesPayload decodes the raw current values payload into a Measurement struct with human-readable values.
+func parseCurrentValuesPayload(value *currentValuesPayload) (Measurement, error) {
+	var m Measurement
+	if value.Version != 1 {
+		return m, errors.New("incorrect version detected")
+	}
+
+	m.Humidity = float32(value.Humidity) / 2.0
+	m.Illuminance = float32(value.Illuminance) * 1.0
+
+	if value.Radon1DayAvg > 16383 {
+		// leave default -1 and return error
+		return m, errors.New("radon value outside bounds")
+	}
+	m.RadonShortTermAvg = float32(value.Radon1DayAvg)
+
+	if value.RadonLongTermAvg > 16383 {
+		return m, errors.New("radon value outside bounds")
+	}
+	m.RadonLongTermAvg = float32(value.RadonLongTermAvg)
+
+	m.Temperature = float32(value.Temp) / 100.0
+	m.RelativeAtmosphericPressure = float32(value.RelAtmPressure) / 50.0
+	m.CO2Level = float32(value.CO2Level) * 1.0
+	m.VOCLevel = float32(value.VOCLevel) * 1.0
+
+	return m, nil
+}
+
 // parseQuery1Payload decodes the raw bytes held in v.Raw into the other fields.
-func (s *Sensor) parseQuery1Payload(v *query1Payload) error {
+func parseQuery1Payload(v *query1Payload) error {
 	if len(v.Raw) != 21 {
 		return errors.New("query1 payload length")
 	}
@@ -420,7 +563,7 @@ func (s *Sensor) parseQuery1Payload(v *query1Payload) error {
 }
 
 // parseQuery2Payload extracts TimeElapsed and AmbientLight from the raw data.
-func (s *Sensor) parseQuery2Payload(v *query2Payload) error {
+func parseQuery2Payload(v *query2Payload) error {
 	if len(v.Raw) != 28 {
 		return errors.New("query2 payload length")
 	}
@@ -431,7 +574,7 @@ func (s *Sensor) parseQuery2Payload(v *query2Payload) error {
 }
 
 // parseQuery3Payload fills v.SeriesStart and NumRecords from the raw bytes.
-func (s *Sensor) parseQuery3Payload(v *query3Payload) error {
+func parseQuery3Payload(v *query3Payload) error {
 	if len(v.Raw) != 13 {
 		return errors.New("query3 payload length")
 	}
@@ -447,7 +590,7 @@ func (s *Sensor) parseQuery3Payload(v *query3Payload) error {
 // The payload contains 12 sub-samples collected during a single hour, with the radon
 // values applying to the entire hour and the other fields present as arrays of 12
 // per-sample measurements. The timestamp is calculated from SeriesStart and RecNo.
-func (s *Sensor) parseHistoryHourPayload(v *historyHourPayload) (HistoryMeasurement, error) {
+func parseHistoryHourPayload(v *historyHourPayload) (HistoryMeasurement, error) {
 	// Calculate the timestamp for this hour block using RecNo (which represents
 	// the hour offset from SeriesStart).
 	timestamp := time.Unix(int64(v.SeriesStart+uint32(v.RecNo)*3600), 0)

@@ -22,8 +22,7 @@ func TestParseCurrentValuesPayload(t *testing.T) {
 	if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &cv); err != nil {
 		t.Fatalf("binary.Read: %v", err)
 	}
-	var s Sensor
-	m, err := s.parseCurrentValuesPayload(&cv)
+	m, err := parseCurrentValuesPayload(&cv)
 	if err != nil {
 		t.Fatalf("parseCurrentValuesPayload: %v", err)
 	}
@@ -59,8 +58,7 @@ func TestParseQuery1Payload(t *testing.T) {
 		0x07, 0x20, 0x03, 0xe8, 0x03,
 	}
 	q := &query1Payload{Raw: raw}
-	var s Sensor
-	if err := s.parseQuery1Payload(q); err != nil {
+	if err := parseQuery1Payload(q); err != nil {
 		t.Fatalf("parseQuery1Payload: %v", err)
 	}
 	if q.a != 1 || q.b != 0 || q.c != 0 {
@@ -79,8 +77,7 @@ func TestParseQuery2Payload(t *testing.T) {
 		0x09, 0x00,
 	}
 	q := &query2Payload{Raw: raw}
-	var s Sensor
-	if err := s.parseQuery2Payload(q); err != nil {
+	if err := parseQuery2Payload(q); err != nil {
 		t.Fatalf("parseQuery2Payload: %v", err)
 	}
 	if q.TimeElapsed != 759306 {
@@ -97,8 +94,7 @@ func TestParseQuery2Payload(t *testing.T) {
 func TestParseQuery3Payload(t *testing.T) {
 	raw := []byte{0x54, 0xa9, 0x8e, 0x0d, 0x5d, 0x00, 0x01, 0x29, 0xdf, 0x26, 0x0f, 0xff, 0xff}
 	q := &query3Payload{Raw: raw}
-	var s Sensor
-	if err := s.parseQuery3Payload(q); err != nil {
+	if err := parseQuery3Payload(q); err != nil {
 		t.Fatalf("parseQuery3Payload: %v", err)
 	}
 	if q.SeriesStart != binary.LittleEndian.Uint32(raw[1:5]) {
@@ -139,8 +135,7 @@ func TestHistoryHourPayloadLayout(t *testing.T) {
 	if decoded.TemperatureRaw[5] != 5 {
 		t.Fatalf("temp mismatch: %v", decoded.TemperatureRaw[5])
 	}
-	var s Sensor
-	hm, err := s.parseHistoryHourPayload(&decoded)
+	hm, err := parseHistoryHourPayload(&decoded)
 	if err != nil {
 		t.Fatalf("parseHistoryHourPayload: %v", err)
 	}
