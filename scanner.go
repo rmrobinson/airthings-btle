@@ -8,6 +8,10 @@ import (
 	"tinygo.org/x/bluetooth"
 )
 
+const (
+	sensorTypeWavePlus = iota
+)
+
 var (
 	// ErrInvalidBluetoothAdapter is returned if the supplied Bluetooth adapter isn't able to be used.
 	ErrInvalidBluetoothAdapter = errors.New("invalid bluetooth adaptor suppled")
@@ -16,6 +20,7 @@ var (
 type pendingSensor struct {
 	scanResult   bluetooth.ScanResult
 	serialNumber int
+	sensorType   int
 }
 
 // Scanner allows for discovery of an Airthings Wave Plus sensor broadcasting over Bluteooth
@@ -31,7 +36,7 @@ func NewScanner(adapter *bluetooth.Adapter) *Scanner {
 }
 
 // FindSensor looks for an Airthings sensor using the provided serial number.
-func (s *Scanner) FindSensor(ctx context.Context, serialNumber int) (*Sensor, error) {
+func (s *Scanner) FindSensor(ctx context.Context, serialNumber int) (Sensor, error) {
 	if s.adapter == nil {
 		return nil, ErrInvalidBluetoothAdapter
 	}
@@ -51,6 +56,10 @@ func (s *Scanner) FindSensor(ctx context.Context, serialNumber int) (*Sensor, er
 				if sn != serialNumber {
 					continue
 				}
+				var sensorType int
+				if result.HasServiceUUID(serviceUUIDWavePlusData) {
+					sensorType = sensorTypeWavePlus
+				}
 
 				//log.Printf("found sensor %d\n", sn)
 				s.adapter.StopScan()
@@ -59,6 +68,7 @@ func (s *Scanner) FindSensor(ctx context.Context, serialNumber int) (*Sensor, er
 				case res <- pendingSensor{
 					scanResult:   result,
 					serialNumber: sn,
+					sensorType:   sensorType,
 				}:
 				default:
 				}
@@ -80,7 +90,9 @@ func (s *Scanner) FindSensor(ctx context.Context, serialNumber int) (*Sensor, er
 	}
 
 	//log.Printf("connected to %d creating sensor\n", ps.serialNumber)
-	sensor := NewSensor(ps.serialNumber, device, int(ps.scanResult.RSSI))
-
-	return sensor, nil
+	if ps.sensorType == sensorTypeWavePlus {
+		return newWavePlusSensor(ps.serialNumber, device, int(ps.scanResult.RSSI)), nil
+	} else {
+		return nil, errors.New("unsupported sensor type found")
+	}
 }
