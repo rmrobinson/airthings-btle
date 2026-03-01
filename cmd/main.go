@@ -48,7 +48,7 @@ func main() {
 
 	if *action == "get" {
 		log.Printf("getting updated values for %d\n", *serialNumber)
-		err = s.Refresh()
+		err = s.Refresh(context.Background())
 		if err != nil {
 			log.Printf("unable to refresh sensor: %s", err)
 			return
@@ -56,7 +56,11 @@ func main() {
 		s.Disconnect()
 
 		log.Printf("Humidity|Illuminance|Radon (Short Term Avg)|Radon (Long Term Avg)|Temperature|Rel Atm Pressure|CO2 Level|VOC Level|")
-		log.Printf("%.1f %%rH %0.1f %% %.1f Bq/m3 %.1f Bq/m3 %.1f degC %.1f hPa %.1f ppm %.1f ppb\n", s.Humidity, s.Illuminance, s.RadonShortTermAvg, s.RadonLongTermAvg, s.Temperature, s.RelativeAtmosphericPressure, s.CO2Level, s.VOCLevel)
+		m := s.CurrentMeasurement
+		log.Printf("%.1f %%rH %0.1f %% %.1f Bq/m3 %.1f Bq/m3 %.1f degC %.1f hPa %.1f ppm %.1f ppb\n",
+			m.Humidity, m.Illuminance, m.RadonShortTermAvg, m.RadonLongTermAvg,
+			m.Temperature, m.RelativeAtmosphericPressure, m.CO2Level, m.VOCLevel)
+		log.Printf("Battery: %.1f%%\n", s.BatteryLevel)
 
 	} else if *action == "discover" {
 		log.Printf("discovering UUIDs for %d\n", *serialNumber)

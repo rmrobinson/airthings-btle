@@ -4,3 +4,4 @@ This library enables programs to read information provided by Airthings sensors 
 
 This has currently only been tested with the Wave Plus sensor.
 
+This was extended to read the history records based on the work Simon Funk documented [here](https://sifter.org/~simon/journal/20191210.1.html) to allow for more battery-concious usage. It also leverages the work done in the custom Airthings Home Assistant component [here](https://github.com/sverrham/sensor.airthings_wave/commit/b7a35b00513a28e613103789390002fb0c7bf23f) to read the battery level from the sensor.
