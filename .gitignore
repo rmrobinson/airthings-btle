@@ -26,3 +26,4 @@ go.work.sum
 
 # specific binaries
 cmd/airthings-cli
+telegraf/telegraf-airthings
